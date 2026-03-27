@@ -25,8 +25,9 @@ from sklearn.preprocessing import (
     Normalizer,
 )
 
-from modeling.build import build_ann
-from modeling.predict import predict
+# Lazy imports for TensorFlow-related modules to improve startup time
+# from modeling.build import build_ann
+# from modeling.predict import predict
 from visualization.visualize import (
     plot_neural_network,
     cm_map,
@@ -429,6 +430,9 @@ def build():
                                         )
                                         return
 
+                                    # Lazy import for TensorFlow-related modules
+                                    from modeling.build import build_ann
+
                                     build_ann(
                                         X_train=X_train,
                                         y_train=y_train,
@@ -482,6 +486,9 @@ def build():
                     with st.spinner("Model is making predictions... Please wait."):
                         if st.button("Run Model", icon="🏃‍♀️"):
                             st.markdown("---")
+
+                            # Lazy import for TensorFlow-related modules
+                            from modeling.predict import predict
 
                             start_time = time.time()
                             y_pred = predict(
@@ -736,6 +743,9 @@ def build():
 
                 if st.button("Generate Predictions"):
                     try:
+                        # Lazy import for TensorFlow-related modules
+                        from modeling.predict import predict
+
                         new_processed_df = st.session_state.get(
                             "preprocessor", None
                         ).transform(new_data_df)

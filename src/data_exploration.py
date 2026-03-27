@@ -132,7 +132,7 @@ def data_exploration():
             [
                 "📊 Histogram",
                 "📦 Box Plot",
-                "📉 Area Chart",
+                "📈 Area Chart",
                 "🫧 Scatter Plot",
                 "🔥 Heatmap",
                 "🥧 Pi Chart",

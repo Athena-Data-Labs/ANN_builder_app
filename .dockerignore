@@ -16,9 +16,11 @@ __pycache__/
 .ipynb_checkpoints/
 notebooks/
 
-# Data, models, and logs
-data/
-models/
+# Data, models, and logs (keep only what's needed)
+data/raw/
+data/external/
+data/interim/
+# Keep data/processed/ and models/ for the app
 logs/
 
 # Reports, figures, and docs
@@ -33,6 +35,11 @@ docs/
 
 # Streamlit
 .streamlit/
+
+# Add Azure and deployment files
+.azure/
+infra/
+azure.yaml
 
 # Docker artifacts
 Dockerfile
