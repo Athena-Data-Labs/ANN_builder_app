@@ -2,7 +2,7 @@
 
 Build and train artificial neural networks with an intuitive Streamlit GUI. Easily upload and explore your data, fine-tune model parameters, and visualize both your data and model performance—all in one streamlined app.
 
-👉 **[Launch the app](https://vahidinj.streamlit.app)**
+👉 **[Launch the app](https://athena-data-labs-ann-builder-app-srcmain-l5l6eu.streamlit.app)**
 
 
 ---
