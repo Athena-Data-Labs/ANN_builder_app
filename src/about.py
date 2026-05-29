@@ -38,6 +38,7 @@ def about_page():
         </p>
         <ul class="feature-list">
             <li><b>📊 Explore and visualize your data:</b> Upload your dataset, view summary statistics, and generate interactive charts (area, box, histogram, scatter, heatmap, and pie).</li>
+            <li><b>🧹 Clean and prepare your data:</b> Use the preprocessing page to remove duplicates, handle missing values, edit columns, and export a cleaned dataset for modeling.</li>
             <li><b>🏗️ Build an Artificial Neural Network (ANN):</b> Configure, train, and evaluate a neural network model for your data.</li>
             <li><b>🔮 Make predictions on new data:</b> After building and training your ANN, you can upload new, unseen data to generate predictions using your trained model. The app allows you to download the prediction results for further analysis or reporting.</li>
         </ul>
@@ -49,6 +50,10 @@ def about_page():
             <li>
                 <b>📊 Data Exploration & Visualization:</b><br>
                 Upload your data, explore its structure, and create interactive visualizations to better understand patterns, distributions, and relationships.
+            </li>
+            <li>
+                <b>🧹 Data Cleaning &amp; Preprocessing:</b><br>
+                Upload a CSV, inspect the structure and quality of the data, make manual edits, and apply cleanup steps before building the ANN.
             </li>
             <li>
                 <b>🏗️ Build Artificial-Neural-Network:</b><br>

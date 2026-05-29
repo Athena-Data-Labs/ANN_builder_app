@@ -10,7 +10,7 @@ Build and train artificial neural networks with an intuitive Streamlit GUI. Easi
 ## 🚀 Features
 
 - **📂 Data Upload:** Easily upload your CSV dataset for analysis.
-- **🧹 Data Cleaning & Preprocessing:** (Coming soon) Handle missing values, remove duplicates, and prepare your data for modeling.
+- **🧹 Data Cleaning & Preprocessing:** Clean missing values, remove duplicates, and prepare your data for modeling before training.
 - **📊 Data Exploration & Visualization:**  
   - View summary statistics, missing values, and correlation matrices.
   - Generate interactive charts: area, box, histogram, scatter, heatmap, and pie.
@@ -81,6 +81,8 @@ Build and train artificial neural networks with an intuitive Streamlit GUI. Easi
 
 3. **Open in your browser:**  
    Visit [http://localhost:8501](http://localhost:8501) (default Streamlit port).
+
+The app now includes a working preprocessing page and is deployed from `src/main.py`.
 
 ---
 
