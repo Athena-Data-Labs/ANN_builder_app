@@ -1,5 +1,6 @@
+# Load TensorFlow before the other numeric libraries to avoid a macOS deadlock.
+from modeling.build import build_ann
 import streamlit as st
-import pickle
 import time
 import io
 import pandas as pd
@@ -25,9 +26,6 @@ from sklearn.preprocessing import (
     Normalizer,
 )
 
-# Lazy imports for TensorFlow-related modules to improve startup time
-# from modeling.build import build_ann
-# from modeling.predict import predict
 from visualization.visualize import (
     plot_neural_network,
     cm_map,
@@ -59,12 +57,25 @@ def build():
             "📥 Upload data for model training (CSV only):", type="csv"
         )
 
+        cleaned_df = st.session_state.get("processed_df")
+        if isinstance(cleaned_df, pd.DataFrame) and not cleaned_df.empty:
+            if st.button("Use cleaned dataset"):
+                st.session_state["uploaded_df"] = cleaned_df.copy()
+                st.success("✅ Cleaned dataset selected for model training.")
+
         if uploaded_file is not None:
             try:
-                with st.spinner("Reading the uploaded file..."):
-                    uploaded_df = pd.read_csv(uploaded_file)
+                file_contents = uploaded_file.getvalue()
+                if file_contents != st.session_state.get("training_upload"):
+                    with st.spinner("Reading the uploaded file..."):
+                        uploaded_df = pd.read_csv(uploaded_file)
+                    if uploaded_df.empty:
+                        st.warning("The CSV is empty. Upload a file with data rows.")
+                        return
+                    st.session_state["uploaded_df"] = uploaded_df
+                    st.session_state["training_upload"] = file_contents
 
-                st.session_state["uploaded_df"] = uploaded_df
+                uploaded_df = st.session_state["uploaded_df"]
                 st.success("✅ File uploaded successfully!")
 
                 st.markdown("### 📋 Data Preview")
@@ -96,6 +107,10 @@ def build():
 
             except Exception as e:
                 st.error(f"⚠️ An error occurred while reading the file: {e}")
+                return
+        elif "uploaded_df" in st.session_state:
+            st.info("Using the dataset already loaded in this session.")
+            st.dataframe(st.session_state["uploaded_df"].head(5), hide_index=True)
         else:
             st.info("📥 Please upload a CSV file to proceed.")
 
@@ -110,11 +125,14 @@ def build():
 
         uploaded_df = st.session_state["uploaded_df"]
 
-        if uploaded_file is not None:
+        if not uploaded_df.empty:
             with st.expander("🎯 Target Feature Selection", expanded=True):
+                if st.session_state.get("model_target") not in uploaded_df.columns:
+                    st.session_state.pop("model_target", None)
                 target = st.selectbox(
                     "Choose Target Feature",
                     uploaded_df.columns,
+                    key="model_target",
                     help="Select the column that represents the target variable.",
                 )
 
@@ -130,6 +148,7 @@ def build():
                         max_value=0.9,
                         step=0.1,
                         value=0.3,
+                        key="model_test_size",
                         help="Proportion of the dataset to include in the test split.",
                     )
                 with col2:
@@ -137,6 +156,7 @@ def build():
                     random_state = st.selectbox(
                         "Select Random State",
                         options=[None, 0, 1, 42, 100],
+                        key="model_random_state",
                         help="Random seed for reproducibility.",
                     )
 
@@ -146,6 +166,7 @@ def build():
                     st.subheader("Scaling Options")
                     scaler_option = st.selectbox(
                         "Select Scaler for Numerical Features",
+                        key="model_scaler",
                         options=[
                             "StandardScaler",
                             "MinMaxScaler",
@@ -159,6 +180,7 @@ def build():
                     st.subheader("Encoding Options")
                     encoder_option = st.selectbox(
                         "Select Encoder for Categorical Features",
+                        key="model_encoder",
                         options=[
                             "OneHotEncoder",
                             "OrdinalEncoder",
@@ -201,60 +223,106 @@ def build():
             scaler_option = options["scaler_option"]
             encoder_option = options["encoder_option"]
 
-            df_features = uploaded_df.drop(columns=[target])
-            num_feat = df_features.select_dtypes(include=["float", "int"]).columns
-            cat_feat = df_features.select_dtypes(include=["category", "object"]).columns
+            prepared_df = st.session_state.get("prepared_df")
+            if (
+                prepared_df is None
+                or not uploaded_df.equals(prepared_df)
+                or options != st.session_state.get("prepared_options")
+            ):
+                for key in (
+                    "X_train", "X_test", "y_train", "y_test", "preprocessor",
+                    "X_columns", "prepared_df", "prepared_options", "ann_model",
+                    "loss_history", "y_pred", "prediction_results",
+                ):
+                    st.session_state.pop(key, None)
 
-            scalers = {
-                "StandardScaler": StandardScaler(),
-                "MinMaxScaler": MinMaxScaler(),
-                "MaxAbsScaler": MaxAbsScaler(),
-                "RobustScaler": RobustScaler(),
-                "Normalizer": Normalizer(),
-            }
-            selected_scaler = scalers[scaler_option]
+            if "X_train" not in st.session_state:
+                if uploaded_df.shape[1] < 2:
+                    st.warning("Choose a dataset with a target column and at least one input column.")
+                    return
+                if uploaded_df.isna().any().any():
+                    st.warning("The dataset has missing values. Fill or remove them in Data Cleaning & Preprocessing, then use the cleaned dataset.")
+                    return
+                numeric_df = uploaded_df.select_dtypes(include=["number"])
+                if not np.isfinite(numeric_df.to_numpy()).all():
+                    st.warning("The dataset contains infinite values. Replace them before preprocessing.")
+                    return
+                if not pd.api.types.is_numeric_dtype(uploaded_df[target]):
+                    st.warning("Choose a numeric target. Binary classification needs labels 0 and 1; regression needs numeric values.")
+                    return
+                try:
+                    df_features = uploaded_df.drop(columns=[target])
+                    num_feat = df_features.select_dtypes(include=["float", "int"]).columns
+                    cat_feat = df_features.select_dtypes(
+                        include=["category", "object", "bool"]
+                    ).columns
 
-            encoders = {
-                "OneHotEncoder": OneHotEncoder(),
-                "OrdinalEncoder": OrdinalEncoder(),
-                "TargetEncoder": TargetEncoder(),
-                "BinaryEncoder": BinaryEncoder(),
-            }
-            selected_encoder = encoders[encoder_option]
+                    scalers = {
+                        "StandardScaler": StandardScaler(),
+                        "MinMaxScaler": MinMaxScaler(),
+                        "MaxAbsScaler": MaxAbsScaler(),
+                        "RobustScaler": RobustScaler(),
+                        "Normalizer": Normalizer(),
+                    }
+                    selected_scaler = scalers[scaler_option]
 
-            preprocessor = ColumnTransformer(
-                transformers=[
-                    ("num", selected_scaler, num_feat),
-                    ("cat", selected_encoder, cat_feat),
-                ]
-            )
+                    encoders = {
+                        "OneHotEncoder": OneHotEncoder(
+                            handle_unknown="ignore", sparse_output=False
+                        ),
+                        "OrdinalEncoder": OrdinalEncoder(
+                            handle_unknown="use_encoded_value", unknown_value=-1
+                        ),
+                        "TargetEncoder": TargetEncoder(),
+                        "BinaryEncoder": BinaryEncoder(),
+                    }
+                    selected_encoder = encoders[encoder_option]
 
-            st.session_state["preprocessor"] = preprocessor
-            st.session_state["X_columns"] = df_features.columns.tolist()
+                    preprocessor = ColumnTransformer(
+                        transformers=[
+                            ("num", selected_scaler, num_feat),
+                            ("cat", selected_encoder, cat_feat),
+                        ]
+                    )
 
-            X = uploaded_df.drop(columns=[target])
-            y = uploaded_df[target]
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=random_state
-            )
+                    X = uploaded_df.drop(columns=[target])
+                    y = uploaded_df[target]
+                    X_train, X_test, y_train, y_test = train_test_split(
+                        X, y, test_size=test_size, random_state=random_state
+                    )
 
-            X_train = X_train.reset_index(drop=True)
-            X_test = X_test.reset_index(drop=True)
-            y_train = y_train.reset_index(drop=True)
-            y_test = y_test.reset_index(drop=True)
+                    X_train = X_train.reset_index(drop=True)
+                    X_test = X_test.reset_index(drop=True)
+                    y_train = y_train.reset_index(drop=True)
+                    y_test = y_test.reset_index(drop=True)
 
-            X_train = preprocessor.fit_transform(X_train)
-            X_test = preprocessor.transform(X_test)
+                    X_train = preprocessor.fit_transform(X_train, y_train)
+                    X_test = preprocessor.transform(X_test)
 
-            X_train = np.array(X_train)
-            X_test = np.array(X_test)
-            y_train = np.array(y_train)
-            y_test = np.array(y_test)
+                    X_train = np.array(X_train)
+                    X_test = np.array(X_test)
+                    y_train = np.array(y_train)
+                    y_test = np.array(y_test)
 
-            st.session_state["X_train"] = X_train
-            st.session_state["y_train"] = y_train
-            st.session_state["X_test"] = X_test
-            st.session_state["y_test"] = y_test
+                    if X_train.shape[1] == 0:
+                        st.warning("No usable input features remain. Choose another target or encoding option.")
+                        return
+                    if not np.isfinite(X_train).all() or not np.isfinite(X_test).all():
+                        st.warning("Preprocessing produced missing or infinite values. Check the data and encoding options.")
+                        return
+
+                    st.session_state["X_train"] = X_train
+                    st.session_state["y_train"] = y_train
+                    st.session_state["X_test"] = X_test
+                    st.session_state["y_test"] = y_test
+
+                    st.session_state["preprocessor"] = preprocessor
+                    st.session_state["X_columns"] = df_features.columns.tolist()
+                    st.session_state["prepared_df"] = uploaded_df.copy()
+                    st.session_state["prepared_options"] = options.copy()
+                except (ValueError, TypeError) as e:
+                    st.warning(f"Could not prepare the data. Check the target, split size and encoding options: {e}")
+                    return
 
             config_tab, viz_train, test_tab = st.tabs(
                 [
@@ -275,6 +343,7 @@ def build():
                         )
                         num_layers = st.number_input(
                             "Number of Hidden Layers",
+                            key="model_num_layers",
                             min_value=1,
                             max_value=10,
                             value=3,
@@ -299,12 +368,14 @@ def build():
                     st.write("Define the output layer parameters.")
                     output_units = st.number_input(
                         "Number of Output Neurons",
+                        key="model_output_units",
                         min_value=1,
                         value=1,
                         step=1,
                     )
                     output_activation = st.selectbox(
                         "Activation Function for Output Layer",
+                        key="model_output_activation",
                         options=["sigmoid", "softmax", "linear"],
                     )
 
@@ -312,6 +383,7 @@ def build():
                     st.write("Set the training parameters for the model.")
                     batch_size = st.number_input(
                         "Batch Size",
+                        key="model_batch_size",
                         min_value=1,
                         value=32,
                         step=1,
@@ -319,6 +391,7 @@ def build():
                     )
                     epochs = st.number_input(
                         "Epochs",
+                        key="model_epochs",
                         min_value=1,
                         value=10,
                         step=1,
@@ -328,6 +401,7 @@ def build():
                 with st.expander("⚙️ Loss Function Configuration", expanded=False):
                     loss = st.selectbox(
                         "Choose the Loss Function for Model Training",
+                        key="model_loss",
                         options=[
                             "binary_crossentropy",
                             "mean_squared_error",
@@ -348,6 +422,7 @@ def build():
                 ):
                     hidden_activation = st.selectbox(
                         "Activation Function for Hidden Layers",
+                        key="model_hidden_activation",
                         options=["relu", "tanh", "sigmoid"],
                         help="Choose the activation function for the hidden layers.",
                     )
@@ -355,6 +430,7 @@ def build():
                 with st.expander("📊 Prediction Threshold", expanded=False):
                     task_type = st.radio(
                         "Select Task Type",
+                        key="model_task_type",
                         options=["Binary Classification", "Regression"],
                         help="Choose the type of task. For regression, no threshold is required.",
                     )
@@ -364,6 +440,7 @@ def build():
                     if task_type == "Binary Classification":
                         pred_threshold = st.number_input(
                             "Select Prediction Threshold",
+                            key="model_pred_threshold",
                             min_value=0.1,
                             max_value=0.9,
                             value=0.5,
@@ -386,6 +463,34 @@ def build():
                 st.success("✅ Model configuration saved successfully!")
                 st.json(st.session_state["model_config"])
 
+            training_config = st.session_state["model_config"].copy()
+            training_config.pop("pred_threshold")
+            training_config["task_type"] = task_type
+            if training_config != st.session_state.get("training_config"):
+                for key in ("ann_model", "loss_history", "y_pred", "prediction_results"):
+                    st.session_state.pop(key, None)
+                st.session_state["training_config"] = training_config
+
+            training_error = None
+            if output_units != 1:
+                training_error = "Binary classification and regression require one output neuron for the selected target."
+            elif task_type == "Binary Classification":
+                if set(uploaded_df[target].unique()) != {0, 1}:
+                    training_error = "Binary classification requires a target containing both 0 and 1. Choose another target or use regression."
+                elif len(np.unique(st.session_state["y_train"])) != 2:
+                    training_error = "The training split contains only one class. Adjust the test size or random state so both classes are present."
+                elif output_activation != "sigmoid" or loss != "binary_crossentropy":
+                    training_error = "For binary classification, select sigmoid output activation and binary_crossentropy loss."
+            elif output_activation == "softmax" or loss not in ("mean_squared_error", "mean_absolute_error"):
+                training_error = "For regression, use mean_squared_error or mean_absolute_error loss. A single softmax output is always 1; choose linear or sigmoid instead."
+            elif output_activation == "sigmoid":
+                st.info("Sigmoid limits regression predictions to 0–1. Use linear output activation for targets outside that range.")
+            if len(st.session_state["X_train"]) < 2:
+                training_error = "At least two training rows are needed for the validation split. Reduce the test size or add more data."
+
+            if training_error:
+                st.warning(training_error)
+
             with viz_train:
                 st.header("📊 Visualization & Training")
 
@@ -396,17 +501,17 @@ def build():
                     if st.button("Visualize Model", icon="📊"):
                         with st.spinner("Generating graph... Please wait."):
                             if "model_config" in st.session_state:
-                                st.plotly_chart(
-                                    plot_neural_network(
-                                        df=uploaded_df,
-                                        layers_units=st.session_state["model_config"][
-                                            "layers_units"
-                                        ],
-                                        output_units=st.session_state["model_config"][
-                                            "output_units"
-                                        ],
-                                    )
+                                fig = plot_neural_network(
+                                    df=uploaded_df,
+                                    layers_units=st.session_state["model_config"][
+                                        "layers_units"
+                                    ],
+                                    output_units=st.session_state["model_config"][
+                                        "output_units"
+                                    ],
+                                    input_units=st.session_state["X_train"].shape[1],
                                 )
+                                st.pyplot(fig)
                                 st.success("✅ Neural network visualization completed!")
                             else:
                                 st.warning(
@@ -417,8 +522,10 @@ def build():
                     st.write(
                         "Train the configured neural network on the uploaded dataset."
                     )
-                    if st.button("Build/Train Model", icon="🎬"):
+                    if st.button("Build/Train Model", icon="🎬", disabled=training_error is not None):
                         if "model_config" in st.session_state:
+                            for key in ("ann_model", "loss_history", "y_pred", "prediction_results"):
+                                st.session_state.pop(key, None)
                             try:
                                 with st.spinner("Training the model... Please wait."):
                                     X_train = st.session_state.get("X_train", None)
@@ -430,10 +537,7 @@ def build():
                                         )
                                         return
 
-                                    # Lazy import for TensorFlow-related modules
-                                    from modeling.build import build_ann
-
-                                    build_ann(
+                                    ann_model = build_ann(
                                         X_train=X_train,
                                         y_train=y_train,
                                         layers_units=st.session_state["model_config"][
@@ -455,7 +559,11 @@ def build():
                                         epochs=st.session_state["model_config"][
                                             "epochs"
                                         ],
+                                        model_path=None,
+                                        history_path=None,
                                     )
+                                    st.session_state["ann_model"] = ann_model
+                                    st.session_state["loss_history"] = ann_model.history.history
                                 st.success("🎉 Model training completed successfully!")
                             except Exception as e:
                                 st.error(
@@ -484,7 +592,7 @@ def build():
 
                 try:
                     with st.spinner("Model is making predictions... Please wait."):
-                        if st.button("Run Model", icon="🏃‍♀️"):
+                        if st.button("Run Model", icon="🏃‍♀️", disabled="ann_model" not in st.session_state):
                             st.markdown("---")
 
                             # Lazy import for TensorFlow-related modules
@@ -497,6 +605,7 @@ def build():
                                 pred_threshold=st.session_state["model_config"][
                                     "pred_threshold"
                                 ],
+                                ann_model=st.session_state["ann_model"],
                             )
 
                             # Ensure y_pred is 1D
@@ -517,11 +626,11 @@ def build():
                             if task_type == "Binary Classification":
                                 y_test = y_test.astype(int)
                                 class_report = classification_report(
-                                    y_test, y_pred, output_dict=True
+                                    y_test, y_pred, labels=[0, 1], output_dict=True, zero_division=0
                                 )
-                                class_labels = sorted(list(set(y_test)))
+                                class_labels = [0, 1]
                                 acc_score = accuracy_score(y_pred=y_pred, y_true=y_test)
-                                cm = confusion_matrix(y_pred=y_pred, y_true=y_test)
+                                cm = confusion_matrix(y_pred=y_pred, y_true=y_test, labels=class_labels)
                                 precision = class_report["weighted avg"]["precision"]
                                 recall = class_report["weighted avg"]["recall"]
                                 f1_score = class_report["weighted avg"]["f1-score"]
@@ -529,7 +638,7 @@ def build():
                             elif task_type == "Regression":
                                 mse = mean_squared_error(y_true=y_test, y_pred=y_pred)
                                 mae = mean_absolute_error(y_true=y_test, y_pred=y_pred)
-                                r2 = r2_score(y_true=y_test, y_pred=y_pred)
+                                r2 = r2_score(y_true=y_test, y_pred=y_pred) if len(y_test) > 1 else np.nan
 
                             test_col1, test_col2 = st.columns([1, 2.5])
 
@@ -578,13 +687,9 @@ def build():
                             with test_col2:
                                 st.subheader("📊 Model Evaluation Metrics")
 
-                                try:
-                                    with open("reports/loss_history.pkl", "rb") as file:
-                                        loss_history = pickle.load(file)
-                                        train_loss = loss_history.get("train_loss", [])
-                                        val_loss = loss_history.get("val_loss", [])
-                                except Exception:
-                                    train_loss, val_loss = [], []
+                                loss_history = st.session_state.get("loss_history", {})
+                                train_loss = loss_history.get("loss", [])
+                                val_loss = loss_history.get("val_loss", [])
 
                                 with st.expander("Loss Curve", expanded=True):
                                     st.markdown("""
@@ -666,18 +771,23 @@ def build():
                                     ):
                                         st.markdown("""
                                         **`Cumulative Gain Chart Interpretation:`**
-                                        - Shows the cumulative proportion of actual positive instances captured as you move through the data sorted by predicted probability.
-                                        - The further the model curve is above the baseline, the better the model's ability to rank positive cases.
+                                        - Shows the cumulative share of actual values, starting with the highest predicted values.
+                                        - A curve above the baseline means larger actual values tend to receive higher predictions.
                                         """)
                                         st.markdown("---")
-                                        st.plotly_chart(
-                                            plot_cumulative_gain(
-                                                y_test=y_test, y_pred=y_pred
-                                            ),
-                                            use_container_width=True,
-                                        )
+                                        if np.any(y_test < 0) or np.sum(y_test) <= 0:
+                                            st.info("Cumulative gain needs non-negative actual values with a positive total.")
+                                        else:
+                                            st.plotly_chart(
+                                                plot_cumulative_gain(
+                                                    y_test=y_test, y_pred=y_pred
+                                                ),
+                                                use_container_width=True,
+                                            )
                         else:
                             st.info(
+                                'Click "Build/Train Model" first, then "Run Model" to get model performance.'
+                                if "ann_model" not in st.session_state else
                                 'Click the "Run Model" button to get model performance.'
                             )
 
@@ -687,9 +797,9 @@ def build():
     with predict_tab:
         st.header("📥 Predict & Download Results")
 
-        if "model_config" not in st.session_state:
+        if "ann_model" not in st.session_state:
             st.warning(
-                "⚠️ Please configure the model in the 'Build & Train Model' tab first."
+                "⚠️ Please train the model in the 'Build & Train Model' tab first."
             )
             return
 
@@ -713,7 +823,17 @@ def build():
 
             if new_data_file is not None:
                 try:
+                    prediction_input = (
+                        new_data_file.getvalue(),
+                        st.session_state["model_config"]["pred_threshold"],
+                    )
+                    if prediction_input != st.session_state.get("prediction_input"):
+                        st.session_state.pop("prediction_results", None)
+                        st.session_state["prediction_input"] = prediction_input
                     new_data_df = pd.read_csv(new_data_file)
+                    if new_data_df.empty:
+                        st.warning("The prediction CSV is empty. Upload a file with data rows.")
+                        return
 
                     missing_columns = [
                         col
@@ -722,17 +842,23 @@ def build():
                     ]
                     if missing_columns:
                         st.warning(
-                            f"⛔️ The uploaded file is missing the following required columns: **{missing_columns}**. The model was training with asformentioned columns in the **'Build & Train Model'** tab."
+                            f"⛔️ The uploaded file is missing required training columns: **{missing_columns}**. Add them before generating predictions."
                         )
+                        return
+                    if new_data_df[X_columns].isna().any().any():
+                        st.warning("The prediction inputs have missing values. Fill or remove them before generating predictions.")
+                        return
 
                     st.write("📋 Uploaded Data Preview:")
                     st.dataframe(new_data_df.head(3), hide_index=True)
                     st.success("✅ File uploaded successfully!")
                 except Exception as e:
                     st.error(f"⚠️ An error occurred while reading the file: {e}")
+                    return
 
         with st.expander("🔮 Generate Predictions", expanded=True):
             if new_data_file is None:
+                st.session_state.pop("prediction_results", None)
                 st.warning(
                     "⚠️ Please upload data in the **'Upload Dataset for Predictions'** section first."
                 )
@@ -742,40 +868,49 @@ def build():
                 )
 
                 if st.button("Generate Predictions"):
+                    st.session_state.pop("prediction_results", None)
                     try:
                         # Lazy import for TensorFlow-related modules
                         from modeling.predict import predict
 
                         new_processed_df = st.session_state.get(
                             "preprocessor", None
-                        ).transform(new_data_df)
+                        ).transform(new_data_df[X_columns])
+                        if not np.isfinite(new_processed_df).all():
+                            st.warning("The prediction inputs contain missing or infinite values after preprocessing. Check the uploaded data.")
+                            return
                         predictions = predict(
                             X_input=new_processed_df,
                             task_type=st.session_state["task_type"],
                             pred_threshold=st.session_state["model_config"][
                                 "pred_threshold"
                             ],
+                            ann_model=st.session_state["ann_model"],
                         )
                         new_data_df[
                             f"Predicted {st.session_state.get('target', None)}"
                         ] = predictions
-                        st.success("✅ Predictions generated successfully!")
-                        st.write(
-                            f"📊 Predictions for the **{st.session_state.get('target', None)}** variable:"
-                        )
-                        st.dataframe(new_data_df, hide_index=True)
-
-                        csv_buffer = io.StringIO()
-                        new_data_df.to_csv(csv_buffer, index=False)
-                        csv_data = csv_buffer.getvalue()
-
-                        st.download_button(
-                            label="Download Predictions",
-                            data=csv_data,
-                            file_name=f"Predictions_{st.session_state.get('target', 'target')}.csv",
-                            mime="text/csv",
-                        )
+                        st.session_state["prediction_results"] = new_data_df
                     except Exception as e:
                         st.error(
                             f"⚠️ An error occurred during prediction or download preparation: {e}"
                         )
+
+                if "prediction_results" in st.session_state:
+                    new_data_df = st.session_state["prediction_results"]
+                    st.success("✅ Predictions generated successfully!")
+                    st.write(
+                        f"📊 Predictions for the **{st.session_state.get('target', None)}** variable:"
+                    )
+                    st.dataframe(new_data_df, hide_index=True)
+
+                    csv_buffer = io.StringIO()
+                    new_data_df.to_csv(csv_buffer, index=False)
+                    csv_data = csv_buffer.getvalue()
+
+                    st.download_button(
+                        label="Download Predictions",
+                        data=csv_data,
+                        file_name=f"Predictions_{st.session_state.get('target', 'target')}.csv",
+                        mime="text/csv",
+                    )

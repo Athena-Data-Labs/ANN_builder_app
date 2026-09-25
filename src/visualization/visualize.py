@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import plotly.graph_objects as go
+from sklearn.metrics import r2_score
 
 
 def fig_pi_chart(df: pd.DataFrame, target: str, color: str = None) -> go.Figure:
@@ -45,11 +46,9 @@ def fig_area_chart(df: pd.DataFrame, x: str, y: str, color: str = None) -> go.Fi
         go.Figure: The generated smooth area chart.
     """
 
-    df[x] = pd.to_numeric(df[x], errors="coerce")
+    df = df.copy()
     df[y] = pd.to_numeric(df[y], errors="coerce")
     df = df.dropna(subset=[x, y])
-
-    df = df[(df[x] != 0) & (df[y] != 0)]
 
     df = df.sort_values(by=x, ascending=True)
 
@@ -182,7 +181,7 @@ def fig_heat_map(
             raise ValueError(
                 f"The target column '{target}' does not exist in the DataFrame."
             )
-        if not pd.api.types.is_numeric_dtype(df[target]):
+        if target not in numeric_df.columns:
             raise ValueError(f"The target column {target} must be numeric.")
 
         # Generate heatmap for correlations with the target column
@@ -314,7 +313,10 @@ def cm_map(data_cm: np.array, class_labels: list) -> go.Figure:
     """
 
     data_cm = np.array(data_cm)
-    cm_percent = data_cm / data_cm.sum(axis=1, keepdims=True) * 100
+    totals = data_cm.sum(axis=1, keepdims=True)
+    cm_percent = np.divide(
+        data_cm, totals, out=np.zeros_like(data_cm, dtype=float), where=totals != 0
+    ) * 100
     annotations = [
         [f"{count}<br>{pct:.1f}%" for count, pct in zip(row_counts, row_pcts)]
         for row_counts, row_pcts in zip(data_cm, cm_percent)
@@ -363,7 +365,7 @@ def cm_map(data_cm: np.array, class_labels: list) -> go.Figure:
 
 
 def plot_neural_network(
-    df: pd.DataFrame, layers_units: int, output_units: int
+    df: pd.DataFrame, layers_units: int, output_units: int, input_units: int = None
 ) -> go.Figure:
     """
     Plots a neural network diagram with the input layer size based on the number of features in the DataFrame.
@@ -377,9 +379,11 @@ def plot_neural_network(
         matplotlib.figure.Figure: The generated neural network plot.
     """
 
-    input_units = df.shape[1] - 1
+    if input_units is None:
+        input_units = df.shape[1] - 1
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig = Figure(figsize=(8, 4))
+    ax = fig.subplots()
     layer_positions = (
         [0] + [i + 1 for i in range(len(layers_units))] + [len(layers_units) + 1]
     )
@@ -507,7 +511,7 @@ def plot_predicted_vs_actual(y_test, y_pred) -> go.Figure:
         }
     )
 
-    r2 = np.corrcoef(y_test, y_pred)[0, 1] ** 2
+    r2 = r2_score(y_test, y_pred) if len(y_test) > 1 else np.nan
     mae = np.mean(residuals)
     rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
 
@@ -604,11 +608,14 @@ def plot_cumulative_gain(
     ):
         raise ValueError("Inputs must be numeric.")
 
-    sorted_indices = np.argsort(y_pred)
+    if np.any(y_test < 0) or np.sum(y_test) <= 0:
+        raise ValueError("Cumulative gain needs non-negative actual values with a positive total.")
+
+    sorted_indices = np.argsort(y_pred)[::-1]
     y_test_sorted = y_test[sorted_indices]
 
-    cumulative_actual = np.cumsum(y_test_sorted) / np.sum(y_test_sorted)
-    cumulative_predicted = np.linspace(0, 1, len(y_test_sorted))
+    cumulative_actual = np.r_[0, np.cumsum(y_test_sorted) / np.sum(y_test_sorted)]
+    cumulative_predicted = np.linspace(0, 1, len(y_test_sorted) + 1)
 
     fig = go.Figure()
 

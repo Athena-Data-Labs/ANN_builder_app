@@ -3,6 +3,10 @@ import numpy as np
 import tensorflow as tf
 import pickle
 
+# Run the first TensorFlow operation before scikit-learn loads to avoid a
+# training deadlock on macOS.
+tf.constant(0)
+
 def build_ann(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -31,15 +35,17 @@ def build_ann(
         batch_size (int): Batch size.
         epochs (int): Number of epochs.
         validation_split (float): Fraction of training data for validation.
-        model_path (str): Path to save the model.
-        history_path (str): Path to save the loss history.
+        model_path (str): Path to save the model, or None to keep it in memory.
+        history_path (str): Path to save the loss history, or None to skip saving.
 
     Returns:
         tf.keras.models.Sequential: Trained ANN model.
     """
     # Ensure output directories exist
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    os.makedirs(os.path.dirname(history_path), exist_ok=True)
+    if model_path is not None:
+        os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
+    if history_path is not None:
+        os.makedirs(os.path.dirname(history_path) or ".", exist_ok=True)
 
     ann = tf.keras.models.Sequential()
     ann.add(tf.keras.layers.InputLayer(input_shape=(X_train.shape[1],)))
@@ -60,18 +66,20 @@ def build_ann(
     )
 
     # Save model
-    with open(model_path, "wb") as file:
-        pickle.dump(ann, file)
+    if model_path is not None:
+        with open(model_path, "wb") as file:
+            pickle.dump(ann, file)
 
     # Save loss history
-    with open(history_path, "wb") as f:
-        pickle.dump(
-            {
-                "train_loss": history.history["loss"],
-                "val_loss": history.history.get("val_loss", []),
-            },
-            f,
-        )
+    if history_path is not None:
+        with open(history_path, "wb") as f:
+            pickle.dump(
+                {
+                    "train_loss": history.history["loss"],
+                    "val_loss": history.history.get("val_loss", []),
+                },
+                f,
+            )
 
     return ann
 

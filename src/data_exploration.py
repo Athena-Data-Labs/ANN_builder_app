@@ -27,8 +27,20 @@ def data_exploration():
 
         if uploaded_file is not None:
             try:
-                df = pd.read_csv(uploaded_file)
-                st.session_state["df"] = df
+                file_contents = uploaded_file.getvalue()
+                if file_contents != st.session_state.get("exploration_upload"):
+                    df = pd.read_csv(uploaded_file)
+                    if df.empty:
+                        st.warning("The CSV is empty. Upload a file with data rows.")
+                        return
+                    st.session_state["df"] = df
+                    st.session_state["raw_df"] = df.copy()
+                    st.session_state["processed_df"] = df.copy()
+                    st.session_state["preprocess_editor_version"] = (
+                        st.session_state.get("preprocess_editor_version", 0) + 1
+                    )
+                    st.session_state["exploration_upload"] = file_contents
+                df = st.session_state["df"]
                 st.success("✅ File uploaded successfully!")
                 st.write("### Data Preview")
                 st.dataframe(df.head(5), use_container_width=True)
@@ -37,8 +49,13 @@ def data_exploration():
                 )
             except Exception as e:
                 st.error(f"⚠️ An error occurred while reading the file: {e}")
+                return
         else:
             st.info("📥 Please upload a CSV file to proceed.")
+
+    if "df" in st.session_state and st.session_state["df"].empty:
+        st.warning("The dataset is empty. Upload a file with data rows and columns.")
+        return
 
     with tab2:
         st.header("📊 Data Exploration")
@@ -231,7 +248,9 @@ def data_exploration():
                 """,
                 unsafe_allow_html=True,
             )
-            if x and y:
+            if x and y and not pd.api.types.is_numeric_dtype(df[y]):
+                st.warning("Select a numeric Y variable to generate the area chart.")
+            elif x and y:
                 st.markdown(
                     f"<h4 style='margin-top:0;'>Area Chart: <span style='color:#F24E1E;'>{y}</span> vs <span style='color:#F24E1E;'>{x}</span></h4>",
                     unsafe_allow_html=True,
@@ -279,9 +298,19 @@ def data_exploration():
                         f"<span style='color:#888;'>Grouped by <b>{color}</b></span>",
                         unsafe_allow_html=True,
                     )
-                if target:
+                size = target
+                if size is not None and (
+                    not pd.api.types.is_numeric_dtype(df[size])
+                    or pd.api.types.is_bool_dtype(df[size])
+                    or df[size].isna().any()
+                    or not df[size].between(0, float("inf"), inclusive="left").all()
+                    or df[size].max() == 0
+                ):
+                    st.info("Marker sizes need non-negative numeric values with no missing values and at least one positive value. Showing equal-size markers.")
+                    size = None
+                if size:
                     st.markdown(
-                        f"<span style='color:#888;'>Marker size by <b>{target}</b></span>",
+                        f"<span style='color:#888;'>Marker size by <b>{size}</b></span>",
                         unsafe_allow_html=True,
                     )
                 st.success(
@@ -292,7 +321,7 @@ def data_exploration():
                 )
                 st.divider()
                 st.plotly_chart(
-                    fig_scatter(df=df, x=x, y=y, color=color, size=target),
+                    fig_scatter(df=df, x=x, y=y, color=color, size=size),
                     use_container_width=True,
                 )
             else:
@@ -371,7 +400,4 @@ def data_exploration():
             else:
                 st.warning(
                     "Please select a target variable (column) to generate the pie chart."
-                )
-                st.plotly_chart(
-                    fig_pi_chart(df=df, target=None), use_container_width=True
                 )

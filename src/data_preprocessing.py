@@ -5,7 +5,7 @@ import streamlit as st
 def _get_active_df() -> pd.DataFrame | None:
     for key in ("processed_df", "raw_df", "df"):
         value = st.session_state.get(key)
-        if isinstance(value, pd.DataFrame) and not value.empty:
+        if isinstance(value, pd.DataFrame):
             return value.copy()
     return None
 
@@ -56,13 +56,23 @@ def clean_preprocess():
         uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
         if uploaded_file is not None:
             try:
-                raw_df = pd.read_csv(uploaded_file)
-                st.session_state["raw_df"] = raw_df.copy()
-                _store_dataframes(raw_df)
+                file_contents = uploaded_file.getvalue()
+                if file_contents != st.session_state.get("preprocess_upload"):
+                    raw_df = pd.read_csv(uploaded_file)
+                    if raw_df.empty:
+                        st.warning("The CSV is empty. Upload a file with data rows.")
+                        return
+                    st.session_state["raw_df"] = raw_df.copy()
+                    _store_dataframes(raw_df)
+                    st.session_state["preprocess_upload"] = file_contents
+                    st.session_state["preprocess_editor_version"] = (
+                        st.session_state.get("preprocess_editor_version", 0) + 1
+                    )
                 st.success("✅ File uploaded successfully!")
-                st.dataframe(raw_df.head(10), use_container_width=True)
+                st.dataframe(st.session_state["raw_df"].head(10), use_container_width=True)
             except Exception as error:
                 st.error(f"❌ Could not read the file: {error}")
+                return
         else:
             st.info("Upload a CSV file to start cleaning your data.")
 
@@ -129,7 +139,7 @@ def clean_preprocess():
                 use_container_width=True,
                 num_rows="dynamic",
                 hide_index=True,
-                key="preprocess_editor",
+                key=f"preprocess_editor_{st.session_state.get('preprocess_editor_version', 0)}",
             )
 
             with st.form("cleanup_form"):
@@ -158,23 +168,39 @@ def clean_preprocess():
             if apply_cleanup:
                 cleaned_df = preview_df.copy()
 
-                if columns_to_drop:
-                    cleaned_df = cleaned_df.drop(columns=columns_to_drop, errors="ignore")
-
                 if missing_strategy == "Fill numeric with median and categorical with mode":
                     cleaned_df = _fill_missing_values(cleaned_df)
                 elif missing_strategy == "Drop rows with missing values":
                     if drop_missing_subset:
                         cleaned_df = cleaned_df.dropna(subset=drop_missing_subset)
                     else:
-                        cleaned_df = cleaned_df.dropna()
+                        cleaned_df = cleaned_df.dropna(
+                            subset=[
+                                col for col in cleaned_df.columns
+                                if col not in columns_to_drop
+                            ]
+                        )
+
+                if columns_to_drop:
+                    cleaned_df = cleaned_df.drop(columns=columns_to_drop, errors="ignore")
+
+                if cleaned_df.empty:
+                    st.warning("Cleanup would leave no rows or columns. Adjust the options before saving.")
+                    return
 
                 if drop_duplicates:
                     cleaned_df = cleaned_df.drop_duplicates()
 
                 _store_dataframes(cleaned_df)
+                st.session_state["preprocess_editor_version"] = (
+                    st.session_state.get("preprocess_editor_version", 0) + 1
+                )
+                st.session_state["cleanup_saved"] = True
+                st.rerun()
+
+            if st.session_state.pop("cleanup_saved", False):
                 st.success("✅ Cleanup applied and saved for the rest of the app.")
-                st.dataframe(cleaned_df.head(10), use_container_width=True)
+                st.dataframe(current_df.head(10), use_container_width=True)
 
     with export_tab:
         st.markdown(
@@ -206,7 +232,8 @@ def clean_preprocess():
                     original_df = st.session_state.get("raw_df")
                     if isinstance(original_df, pd.DataFrame):
                         _store_dataframes(original_df)
+                        st.session_state["preprocess_editor_version"] = (
+                            st.session_state.get("preprocess_editor_version", 0) + 1
+                        )
                         st.success("Dataset reset to the original upload.")
                         st.rerun()
-
-

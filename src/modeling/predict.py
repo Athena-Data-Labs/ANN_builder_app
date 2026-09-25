@@ -3,7 +3,8 @@ import numpy as np
 
 
 def predict(
-    X_input: np.ndarray, task_type: str, pred_threshold: float = None
+    X_input: np.ndarray, task_type: str, pred_threshold: float = None,
+    ann_model=None,
 ) -> np.ndarray:
     """
     Predict outcomes using the trained ANN model.
@@ -12,13 +13,15 @@ def predict(
         X_input (np.ndarray): Input features for prediction.
         task_type (str): "Binary Classification" or "Regression".
         pred_threshold (float, optional): Threshold for binary classification.
+        ann_model: Trained model for this session. Loads the saved model if omitted.
 
     Returns:
         np.ndarray: Predicted outcomes.
     """
-    model_file = "models/ann_model.pkl"
-    with open(model_file, "rb") as file:
-        ann_model = pickle.load(file)
+    if ann_model is None:
+        model_file = "models/ann_model.pkl"
+        with open(model_file, "rb") as file:
+            ann_model = pickle.load(file)
 
     y_pred = ann_model.predict(X_input)
 

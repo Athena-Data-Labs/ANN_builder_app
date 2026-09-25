@@ -1,6 +1,6 @@
 import streamlit as st
-from data_exploration import data_exploration
 from model_build import build
+from data_exploration import data_exploration
 from about import about_page
 from data_preprocessing import clean_preprocess
 
@@ -17,6 +17,12 @@ def main():
 
     st.sidebar.title("🧭 Navigation")
     selected_page = st.sidebar.selectbox("Select a Page", list(pages.keys()))
+
+    # Keep model settings when their widgets are hidden on another page.
+    if pages[selected_page] != build:
+        for key in list(st.session_state):
+            if key.startswith("model_") or key.startswith("layer_"):
+                st.session_state[key] = st.session_state[key]
 
     st.sidebar.markdown('---')
     st.sidebar.markdown('**Version:** 0.9.0')
